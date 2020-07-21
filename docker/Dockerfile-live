@@ -24,7 +24,11 @@ RUN apt-get update && apt-get install -q -y --fix-missing \
 	firefox \
 	vim \
 	xvfb \
-	x11vnc && \
+	x11vnc \
+        libxext6 \
+        libxi6 \
+        libxtst6 \
+        libxrender1 && \
 	apt-get clean && \
 	rm -rf /var/lib/apt/lists/*  && \
 	pip3 install --upgrade pip zapcli python-owasp-zap-v2.4 && \
@@ -47,23 +51,23 @@ RUN mkdir /home/zap/.vnc
 ENV JAVA_HOME /usr/lib/jvm/java-11-openjdk-amd64/
 ENV PATH $JAVA_HOME/bin:/zap/:$PATH
 
-# Pull the ZAP repo
-RUN git clone --depth 1 https://github.com/zaproxy/zaproxy.git && \
-	# Build ZAP with weekly add-ons
-	cd zaproxy && \
-	ZAP_WEEKLY_ADDONS_NO_TEST=true ./gradlew :zap:prepareDistWeekly && \
-	cp -R /zap-src/zaproxy/zap/build/distFilesWeekly/* /zap/ && \
-	rm -rf /zap-src/* && \
-	cd /zap/ && \
-	# Setup Webswing
-	curl -s -L https://bitbucket.org/meszarv/webswing/downloads/webswing-2.5.10.zip > webswing.zip && \
-	unzip webswing.zip && \
-	rm webswing.zip && \
-	mv webswing-* webswing && \
-	# Remove Webswing demos
-	rm -R webswing/demo/ && \
-	# Accept ZAP license
-	touch AcceptedLicense
+# Build ZAP with weekly add-ons
+COPY --chown=zap:zap . .
+RUN ./gradlew clean && \
+    ZAP_WEEKLY_ADDONS_NO_TEST=true ./gradlew :zap:prepareDistWeekly
+RUN cp -R /zap-src/zap/build/distFilesWeekly/* /zap/ && \
+    rm -rf /zap-src/*
+
+RUN cd /zap/ && \
+    # Setup Webswing
+    curl -s -L https://storage.googleapis.com/builds.webswing.org/releases/webswing-20.1.4.zip > webswing.zip && \
+    unzip webswing.zip && \
+    cp -R webswing-* webswing && \
+    sed -i "s/localhost/0.0.0.0/" webswing/jetty.properties && \
+    rm -rf webswing/apps && \
+    rm webswing.zip && \
+    # Accept ZAP license
+    touch AcceptedLicense
 
 ENV ZAP_PATH /zap/zap.sh
 # Default port for use with zapcli
@@ -73,25 +77,27 @@ ENV HOME /home/zap/
 ENV LC_ALL=C.UTF-8
 ENV LANG=C.UTF-8
 
-COPY zap* CHANGELOG.md /zap/
-COPY webswing.config /zap/webswing/
-COPY policies /home/zap/.ZAP_D/policies/
-COPY policies /root/.ZAP_D/policies/
-COPY scripts /home/zap/.ZAP_D/scripts/
-COPY .xinitrc /home/zap/
+COPY docker/zap* /zap/
+COPY docker/webswing.config /zap/webswing/
+COPY docker/policies /home/zap/.ZAP_D/policies/
+COPY docker/policies /root/.ZAP_D/policies/
+COPY docker/scripts /home/zap/.ZAP_D/scripts/
+COPY docker/.xinitrc /home/zap/
 
 #Copy doesn't respect USER directives so we need to chown and to do that we need to be root
 USER root
 
 RUN chown zap:zap /zap/* && \
-	chown zap:zap /zap/webswing/webswing.config && \
-	chown zap:zap -R /home/zap/.ZAP_D/ && \
-	chown zap:zap /home/zap/.xinitrc && \
-	chmod a+x /home/zap/.xinitrc && \
-	chmod +x /zap/zap.sh && \
-	rm -rf /zap-src
+    chown zap:zap /zap/webswing/webswing.config && \
+    chown zap:zap -R /home/zap/.ZAP_D/ && \
+    chown zap:zap /home/zap/.xinitrc && \
+    chmod a+x /home/zap/.xinitrc && \
+    chmod +x /zap/zap.sh && \
+    rm -rf /zap-src
 
-WORKDIR /zap
+WORKDIR /zap/webswing
 
 USER zap
+ENV WEBSWING_JAVA_OPTS=-Xmx6g
 HEALTHCHECK --retries=5 --interval=5s CMD zap-cli status
+CMD WEBSWING_HOME=/zap/webswing ./webswing.sh start && tail -f /dev/null
